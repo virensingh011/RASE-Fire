@@ -1,63 +1,369 @@
 # RASE-Fire
+
 Reliability-Aware Spatiotemporal Evidence Fusion for Wildfire Forecasting.
+
 Hypothesis: a multimodal forecaster that explicitly estimates *modality reliability* and *predictive uncertainty* degrades
 more gracefully than conventional fusion when observations are missing, noisy, stale, spatially corrupted, biased or shifted.
 
 ## Status (read this first)
-| Piece | State |
-|---|---|
-| Model (encoders -> reliability fields -> spatial evidence arbitration -> decoder + uncertainty) | implemented, tested |
-| Corruption engine (missing / noise / spatial / temporal / bias / combined; seeded, per-pixel severity map) | implemented, tested |
-| Losses (forecast, reliability supervision, Brier calibration, consistency) | implemented, tested |
-| Baselines: concat U-Net, ConvLSTM, attention fusion, modality dropout | implemented |
-| Baseline UTAE | **stub** - plug in the authors' TS-SatFire implementation |
-| Metrics (IoU, Dice, boundary F1, Hausdorff, ECE, Brier, robustness AUC, reliability-corruption corr., risk-coverage/AURC) | implemented, tested |
-| Event-level bootstrap CIs + paired bootstrap | implemented |
-| Synthetic dataset | smoke-test only, **not evidence for the paper** |
-| **TS-SatFire / CanadaFireSat adapter** | **contract only** (`data/npz_dataset.py`); you write the converter (Phase 1) |
 
-Nothing here has been run on real wildfire data. Numbers on the synthetic set only prove the code runs.
+| Piece                                                                                                                     | State                                                     |
+| ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| Model (encoders -> reliability fields -> spatial evidence arbitration -> decoder + uncertainty)                           | **Implemented, tested**                                   |
+| Corruption engine (missing / noise / spatial / temporal / bias / combined; seeded, per-pixel severity map)                | **Implemented, tested**                                   |
+| Losses (forecast, reliability supervision, Brier calibration, consistency)                                                | **Implemented, tested**                                   |
+| Baselines: concat U-Net, ConvLSTM, attention fusion, modality dropout                                                     | **Implemented**                                           |
+| Baseline UTAE                                                                                                             | **Stub** - plug in the authors' TS-SatFire implementation |
+| Metrics (IoU, Dice, boundary F1, Hausdorff, ECE, Brier, robustness AUC, reliability-corruption corr., risk-coverage/AURC) | **Implemented, tested**                                   |
+| Event-level bootstrap CIs + paired bootstrap                                                                              | **Implemented**                                           |
+| Synthetic dataset                                                                                                         | **Smoke-test only - not evidence for the paper**          |
+| TS-SatFire adapter                                                                                                        | **Contract only** (`data/npz_dataset.py`)                 |
+| CanadaFireSat external evaluation                                                                                         | **Planned**                                               |
 
-## Layout
-`rasefire/{corruption,models,baselines,training,evaluation,visualization,data}` - `configs/` (base + baselines + `ablation/m1..m5`) -
-`train.py`, `evaluate.py`, `tests/`.
+> **Important:** Nothing in this repository has yet been validated on real wildfire data.
+> The current synthetic results only demonstrate that the software pipeline runs end to end.
+
+## Core idea
+
+RASE-Fire treats the reliability of each information source as part of the forecasting problem.
+
+```text
+Satellite ──────┐
+Weather ────────┤
+Terrain ────────┤
+Fire history ───┘
+        ↓
+Per-modality encoders
+        ↓
+Reliability estimation
+        ↓
+Spatial evidence arbitration
+        ↓
+Spatiotemporal decoder
+        ↓
+┌───────────────────────────┐
+│ Fire probability forecast │
+│ Predictive uncertainty    │
+└───────────────────────────┘
+```
+
+For each modality \(m\), the model estimates a spatial reliability field:
+
+$$
+r_m(x,y) \in [0,1]
+$$
+
+Fusion weights are computed as:
+
+$$
+\alpha_m = \mathrm{softmax}_m(r_m/\tau)
+$$
+
+and the fused representation is:
+
+$$
+F = \sum_m \alpha_m \, r_m \, F_m
+$$
+
+The reliability gate allows evidence contribution to shrink when the available sources become unreliable.
+
+## Reliability vs. uncertainty
+
+RASE-Fire separates two concepts:
+
+**Modality reliability**
+
+> How trustworthy does the available input evidence appear?
+
+**Predictive uncertainty**
+
+> How uncertain is the resulting forecast?
+
+These are modeled separately rather than treating attention weights as uncertainty.
+
+## Corruption engine
+
+The benchmark intentionally degrades observations to test whether the model remains stable when evidence quality decreases.
+
+Supported corruption modes:
+
+* missing modalities
+* random noise
+* spatial corruption
+* temporal staleness
+* systematic bias
+* combined failures
+
+Every corruption is seeded and produces a per-pixel corruption severity map.
+
+The corruption map is **not provided to the model**. It is only used as supervision for the reliability objective:
+
+$$
+L_{rel} = \|r_m - (1-c_m)\|^2
+$$
+
+where \(c_m\) is the known corruption severity generated by the corruption engine.
+
+This lets us test whether learned reliability actually tracks degraded evidence.
+
+## Baselines
+
+Current baselines:
+
+* Concat U-Net
+* ConvLSTM
+* Attention Fusion
+* Modality Dropout
+* RASE-Fire
+
+UTAE is currently a stub and will be integrated using the official TS-SatFire implementation.
+
+## Ablation ladder
+
+```text
+m1  Plain fusion
+ ↓
+m2  + global reliability
+ ↓
+m3  + reliability supervision
+ ↓
+m4  + spatial reliability
+ ↓
+m5  + predictive uncertainty
+ ↓
+m6  selective prediction
+```
+
+`m3b` is a specific control:
+
+> corruption-aware training without the reliability loss
+
+This isolates whether performance improvements come from simply training on degraded inputs or from explicitly learning calibrated reliability.
+
+## Evaluation
+
+RASE-Fire evaluates more than clean-data accuracy.
+
+### Forecast quality
+
+* IoU
+* Dice / F1
+* Boundary F1
+* Hausdorff distance
+
+### Calibration and uncertainty
+
+* Expected Calibration Error (ECE)
+* Brier score
+* Risk-coverage
+* AURC
+
+### Robustness
+
+* Performance under increasing corruption severity
+* Robustness AUC
+* Reliability-corruption correlation
+
+### Statistics
+
+Confidence intervals are bootstrapped over **wildfire events rather than individual pixels**.
+
+Paired bootstrap comparisons are used for model-to-model evaluation.
+
+Experiments should use multiple random seeds (`>= 3-5`) rather than relying on a single training run.
+
+## Data contract
+
+The current RASE-Fire dataloader expects:
+
+```text
+sat      (B,T,Cs,H,W)
+weather  (B,T,Cw,H,W)
+terrain  (B,Ct,H,W)
+fire     (B,T,1,H,W)
+target   (B,1,H,W)
+event_id (B,)
+```
+
+Any model returning:
+
+```python
+{
+    "prob": (B,1,H,W),
+    "unc": ...
+}
+```
+
+can plug into the common training/evaluation interface.
+
+## Synthetic demo
+
+The repository includes a synthetic stand-in dataset for software validation.
+
+These results are **not evidence for the research hypothesis**.
+
+The synthetic experiment is only intended to verify:
+
+* model interfaces
+* training
+* corruption generation
+* metrics
+* evaluation
+* visualization
+* statistical code
+
+Real research evaluation begins after integration with the official TS-SatFire data.
+
+## Roadmap
+
+### 1. Data integration
+
+* Convert official TS-SatFire preprocessing output to the `.npz` contract.
+* Compute normalization statistics from the training split only.
+* Preserve event-level separation.
+* Use the official year/test split.
+* Freeze the final test set.
+* Reproduce at least one published baseline before evaluating RASE-Fire.
+
+### 2. Baseline reproduction
+
+* Integrate official UTAE.
+* Reproduce the clean benchmark.
+* Verify preprocessing and evaluation independently.
+
+### 3. Corruption calibration
+
+Current corruption ranges are experimental defaults.
+
+Next, refine:
+
+* satellite radiometric corruption
+* weather noise/bias ranges
+* spatial failure patterns
+* temporal staleness assumptions
+
+Real-world calibration should be documented separately from synthetic stress testing.
+
+### 4. Robustness campaign
+
+Evaluate:
+
+* missing observations
+* sensor noise
+* spatial failures
+* temporal staleness
+* systematic bias
+* combined failures
+
+### 5. Distribution shift
+
+Evaluate:
+
+* held-out geographic regions
+* held-out temporal conditions
+* final 2021 test split
+
+The test set must remain frozen and must not be used for model tuning.
+
+### 6. External validation
+
+Use CanadaFireSat as a separate external evaluation.
+
+Because the datasets use different formulations and observation systems, external results will be reported separately rather than merged into the primary benchmark.
+
+## Known limitations
+
+* Time is currently folded into channels in the encoders rather than modeled with a dedicated temporal-attention architecture.
+* Weather is assumed to be represented on the model grid; non-gridded sources require preprocessing/interpolation.
+* Missing values are filled with the normalized mean. No explicit missing-data mask is provided to the model.
+* Temporal staleness applies primarily to sequential inputs such as fire history; it is not meaningful for static terrain.
+* Current corruption severity ranges are not yet calibrated to measured real-world sensor failure distributions.
+* The synthetic dataset is only a software validation environment.
 
 ## Quick start
-    pip install -r requirements.txt
-    python -m pytest tests -q
-    python train.py --config configs/rase_full.yaml --set train.epochs=15 seed=0
-    python train.py --config configs/concat_unet.yaml
-    python evaluate.py --ckpt rase=runs/rase_full_s0/best.pt concat=runs/concat_unet_s0/best.pt --out results
 
-## Batch contract
-`sat (B,T,Cs,H,W)  weather (B,T,Cw,H,W)  terrain (B,Ct,H,W)  fire (B,T,1,H,W)  target (B,1,H,W)  event_id (B,)`.
-Any model returning `{"prob": (B,1,H,W), "unc": ...}` (use `models.common.finalize`) plugs into training/evaluation.
+Install dependencies:
 
-## Design notes
-* Reliability `r_m(x,y)` in [0,1] per modality; `alpha = softmax_m(r/tau)`; `F = sum_m alpha_m * r_m * F_m` (the `r` gate lets evidence
-  shrink when *all* sources are bad). Reliability head sees own features + mean of other modalities (cross-modal consistency).
-* Reliability supervision: `L_rel = ||r_m - (1 - c_m)||^2`, `c_m` = known per-pixel corruption from the corruption engine. The corruption
-  is *not* given to the model as a mask.
-* Uncertainty: heteroscedastic logit-noise head (MC-BCE in training, probit approximation at inference). Reliability (input trust) and
-  predictive uncertainty (output doubt) are separate outputs. Selective prediction ranks pixels by entropy or entropy+(1-mean r).
-* Corruption training modes: `none`, `dropout` (whole-modality zeroing = Baseline E), `aware` (all kinds, severity ~ U(0,1)).
-* Ablation ladder (`configs/ablation`): m1 plain fusion -> m2 +global reliability -> m3 +supervision(+corruption-aware training)
-  -> m4 +spatial -> m5 +uncertainty -> m6 selective prediction (evaluation-time, `risk_coverage`). `m3b`: corruption-aware without `L_rel`
-  (isolates "just dropout-like training" vs. calibrated reliability).
-* Statistics: bootstrap over **fires** (`evaluation/statistics.py`), never pixels. Run >=3-5 seeds (`--set seed=k`) and pool.
+```bash
+pip install -r requirements.txt
+```
 
-## Roadmap (your plan's phases)
-1. **Data (blocking):** convert official TS-SatFire preprocessing output to the `.npz` contract; z-score stats from train only; split by
-   year + held-out regions (`data/splits.py`); 2021 = final test, frozen. Reproduce one published baseline before touching RASE.
-2. Plug in official UTAE; reproduce clean benchmark table.
-3. Tune corruption *ranges* for realism (satellite radiometric model, weather bias magnitudes) - currently defensible defaults, not calibrated
-   to real sensor failures. Document as a limitation.
-4. Robustness campaign (`evaluate.py`), OOD (held-out region / 2021), CanadaFireSat external study (separate formulation, separate table).
-5. Do NOT tune on test; do not tune until the curve looks good.
+Run tests:
 
-## Known limitations / honest caveats
-* Time is folded into channels in the encoders (simple); a temporal attention/UTAE-style encoder is a natural upgrade.
-* Weather is assumed on the pixel grid (broadcast scalars if your source is not gridded).
-* Missing data is filled with 0 (normalised mean), which is indistinguishable from a real value of 0; this is deliberate (no mask leak) but
-  makes "missing" partly a noise problem - report it.
-* Temporal staleness for `fire` replaces history with older frames; for `terrain` it is a no-op.
+```bash
+python -m pytest tests -q
+```
+
+Run the RASE-Fire synthetic smoke test:
+
+```bash
+python train.py --config configs/rase_full.yaml --set train.epochs=15 seed=0
+```
+
+Run the concat U-Net baseline:
+
+```bash
+python train.py --config configs/concat_unet.yaml
+```
+
+Evaluate checkpoints:
+
+```bash
+python evaluate.py \
+  --ckpt rase=runs/rase_full_s0/best.pt \
+  concat=runs/concat_unet_s0/best.pt \
+  --out results
+```
+
+## Repository layout
+
+```text
+RASE-Fire/
+├── configs/
+│   ├── ablation/
+│   ├── attention_fusion.yaml
+│   ├── base.yaml
+│   ├── concat_unet.yaml
+│   ├── convlstm.yaml
+│   ├── modality_dropout.yaml
+│   └── rase_full.yaml
+│
+├── rasefire/
+│   ├── baselines/
+│   ├── corruption/
+│   ├── data/
+│   ├── evaluation/
+│   ├── models/
+│   ├── training/
+│   └── visualization/
+│
+├── results_synthetic_demo_NOT_EVIDENCE/
+├── tests/
+├── evaluate.py
+├── train.py
+├── requirements.txt
+├── LICENSE
+└── README.md
+```
+
+## Research question
+
+RASE-Fire is not designed only to answer:
+
+> **Which model achieves the highest IoU on clean data?**
+
+The primary question is:
+
+> **What happens when the evidence available to a multimodal forecasting system becomes unreliable, and can the system recognize and respond to that degradation?**
+
+## License
+
+RASE-Fire source code is released under the **MIT License**.
+
+Third-party datasets, implementations and dependencies remain subject to their respective licenses and terms.
+
+## Research status
+
+This repository is an **active research prototype**.
+
+Real-data validation, benchmark reproduction, robustness experiments, ablations and external evaluation are ongoing.
