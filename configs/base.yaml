@@ -1,0 +1,12 @@
+name: base
+seed: 0
+out_dir: runs
+data: {name: synthetic, size: 32, T: 4, sat_ch: 4, weather_ch: 4, terrain_ch: 3, n_train: 256, n_val: 64, n_test: 96, per_event: 8}
+model: {name: rase, dim: 32, base: 32, depth: 3, use_reliability: true, spatial: true, gate: true, tau: 0.25, uncertainty: true}
+train:
+  epochs: 20
+  lr: 0.002
+  batch_size: 16
+  weight_decay: 0.0001
+  corruption: {mode: aware, p: 0.5}
+  loss: {pos_weight: 1.0, mc_samples: 4, lambda_rel: 1.0, lambda_cal: 0.0, lambda_cons: 0.0}

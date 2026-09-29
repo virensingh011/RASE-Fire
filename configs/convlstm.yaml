@@ -1,0 +1,4 @@
+base: base.yaml
+name: convlstm
+model: {name: convlstm, hidden: 32, layers: 2}
+train: {corruption: {mode: none}, loss: {lambda_rel: 0.0}}

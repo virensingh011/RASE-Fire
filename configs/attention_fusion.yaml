@@ -1,0 +1,4 @@
+base: base.yaml
+name: attention_fusion
+model: {name: attention_fusion, dim: 32, base: 32, depth: 3}
+train: {corruption: {mode: none}, loss: {lambda_rel: 0.0}}

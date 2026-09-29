@@ -1,0 +1,4 @@
+base: base.yaml
+name: modality_dropout
+model: {name: concat_unet, base: 32, depth: 3}
+train: {corruption: {mode: dropout, p: 0.3}, loss: {lambda_rel: 0.0}}

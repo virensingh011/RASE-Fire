@@ -1,0 +1,4 @@
+base: ../base.yaml
+name: m2_reliability_global
+model: {use_reliability: true, spatial: false, uncertainty: false}
+train: {corruption: {mode: none}, loss: {lambda_rel: 0.0}}

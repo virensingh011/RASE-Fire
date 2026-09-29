@@ -1,0 +1,4 @@
+base: ../base.yaml
+name: m1_plain_fusion
+model: {use_reliability: false, uncertainty: false}
+train: {corruption: {mode: none}, loss: {lambda_rel: 0.0}}

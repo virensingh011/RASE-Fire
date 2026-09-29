@@ -1,0 +1,4 @@
+base: ../base.yaml
+name: m3b_corruption_aware_no_rel_loss
+model: {use_reliability: true, spatial: true, uncertainty: true}
+train: {loss: {lambda_rel: 0.0}}

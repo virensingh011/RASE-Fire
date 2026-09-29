@@ -1,0 +1,4 @@
+base: base.yaml
+name: concat_unet
+model: {name: concat_unet, base: 32, depth: 3}
+train: {corruption: {mode: none}, loss: {lambda_rel: 0.0}}
